@@ -1,0 +1,103 @@
+@startuml Itau
+title "Itaú <> FPASS"
+autonumber
+skinparam MaxAsciiMessageLength 100
+
+actor Usuário as User
+
+box Itaú #ec700175
+participant App as ItauApp
+end box
+box FPASS #b43de775
+participant WebApp as FpassWebApp
+participant API as FpassAPI
+end box
+
+User -> ItauApp: Acessa
+User -> ItauApp: Ação de acesso ao FPASS
+group Autenticação
+  ItauApp -> ItauApp: Gerar JWT
+  note left
+  **Ephemeral JWT (10seconds)**
+  Algorithm: HS256
+  Secret: {itauFpassSecretUuid}
+  **Payload**
+  {
+    "iss": "**itau**",
+    "sub": "{uniqueUserId}",
+    "aud": "{fpassItauWhitelabelUrl}"
+    "iat": "{now}"
+    "exp": "{iat + **10seconds**}"
+  }
+  **Armazenamento**: Não
+  **Transmissão**: URL query param jwt
+  end note
+  ItauApp -> FpassWebApp: URL Redirect
+  note right
+  **URL**: https://{fpassItauWhitelabelUrl}/?jwt={**ephemeralJwt**}
+  end note
+end
+
+group Autorização
+
+  group Verificação de autenticação
+    FpassWebApp -> FpassAPI: Verificação do **Ephemeral JWT**
+    note right
+    * Assinatura do JWT (Secret: {itauFpassSecretUuid}¹)
+    * Data de emissão (iat)
+    * Data de expiração (exp)
+    * Formato da identificação (sub)
+    ¹Acordado previamente entre Itaú-FPASS.
+    end note
+  end
+
+  group Credenciamento
+    FpassAPI -> FpassAPI: Busca de usuário preexistente para o provedor
+    note over FpassAPI
+    **Filtros de busca**
+    * provider.name == {ephemeralJwt.iss}
+    * provider.externalId == {ephemeralJwt.sub}
+    end note
+  
+  else Caso usuário não encontrado - Novo usuário
+  FpassAPI -> FpassAPI: Criação de usuário FPASS
+  note left
+  **User Entity**
+  {
+    "userId": {uuid},
+    "name": "Lifelong Learner",
+    "provider": {
+      "name": "{ephemeralJwt.iss}",
+      "externalId": "{ephemeralJwt.sub}"
+    },
+    "createdAt": {now}
+  }
+  end note
+  FpassAPI -> FpassAPI: Criação do **Application JWT**
+  note left
+  **Application JWT (7days)**
+  Algorithm: HS256
+  Secret: {fpassSecretUuid}
+  **Payload**
+  {
+    "iss": "**fpass**",
+    "sub": "{userId}",
+    "aud": "{fpassItauWhitelabelUrl}"
+    "iat": "{now}"
+    "exp": "{iat + **7days**}"
+  }
+  **Armazenamento**: Browser
+  **Transmissão**: Requisições da API
+  end note
+  FpassAPI -> FpassWebApp: Retorna **Application JWT**
+
+  else Caso usuário seja encontrado
+  FpassAPI -> FpassAPI: Criação do **Application JWT**
+  FpassAPI -> FpassWebApp: Retorna **Application JWT**
+  end
+
+end
+
+FpassWebApp -> User: Acesso logado 
+
+@enduml
